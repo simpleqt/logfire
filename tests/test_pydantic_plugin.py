@@ -11,7 +11,6 @@ import sqlmodel
 from dirty_equals import IsInt
 from inline_snapshot import snapshot
 from opentelemetry.sdk.metrics.export import AggregationTemporality, InMemoryMetricReader
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -32,6 +31,7 @@ from logfire.integrations.pydantic import (
     get_schema_name,
 )
 from logfire.testing import SeededRandomIdGenerator, TestExporter
+from tests.conftest import ReusableSimpleSpanProcessor
 from tests.test_metrics import get_collected_metrics
 
 pytestmark = pytest.mark.skipif(
@@ -700,25 +700,39 @@ def test_pydantic_plugin_sample_rate_config(exporter: TestExporter, config_kwarg
     assert len(exporter.exported_spans_as_dict()) == 1
 
 
-@pytest.mark.xfail(reason='We need to fix the nesting `trace_sample_rate` logic.')
-def test_pydantic_plugin_plugin_settings_sample_rate(exporter: TestExporter) -> None:
+@pytest.mark.parametrize(
+    'sample_rate,exported_spans',
+    [
+        (0.0, 0),
+        (0.4, 5),
+        (1.0, 10),
+    ],
+)
+def test_pydantic_plugin_plugin_settings_sample_rate(
+    exporter: TestExporter, sample_rate: float, exported_spans: int
+) -> None:
     logfire.configure(
         send_to_logfire=False,
-        additional_span_processors=[SimpleSpanProcessor(exporter)],
+        console=False,
+        additional_span_processors=[ReusableSimpleSpanProcessor(exporter)],
         advanced=logfire.AdvancedOptions(
             id_generator=SeededRandomIdGenerator(),
         ),
         metrics=logfire.MetricsOptions(additional_readers=[InMemoryMetricReader()]),
     )
 
-    class MyModel(BaseModel, plugin_settings={'logfire': {'record': 'all', 'trace_sample_rate': 0.4}}):
+    class MyModel(BaseModel, plugin_settings={'logfire': {'record': 'all', 'trace_sample_rate': sample_rate}}):
         x: int
 
     for _ in range(10):
         with pytest.raises(ValidationError):
             MyModel.model_validate({'x': 'a'})
 
-    assert len(exporter.exported_spans_as_dict()) == 6
+    spans = exporter.exported_spans_as_dict(include_instrumentation_scope=True)
+    # The id generator is seeded, so the exact number of sampled spans is deterministic.
+    assert len(spans) == exported_spans
+    # Sampling must not change the instrumentation scope of the spans that are kept.
+    assert {span['instrumentation_scope'] for span in spans} <= {'logfire.pydantic'}
 
 
 @pytest.mark.parametrize('tags', [['tag1', 'tag2'], ('tag1', 'tag2')])
@@ -733,11 +747,11 @@ def test_pydantic_plugin_plugin_settings_tags(exporter: TestExporter, tags: Any)
     assert span['attributes']['logfire.tags'] == ('tag1', 'tag2')
 
 
-@pytest.mark.xfail(reason='We need to fix the nesting `trace_sample_rate` logic.')
 def test_pydantic_plugin_plugin_settings_sample_rate_with_tag(exporter: TestExporter) -> None:
     logfire.configure(
         send_to_logfire=False,
-        additional_span_processors=[SimpleSpanProcessor(exporter)],
+        console=False,
+        additional_span_processors=[ReusableSimpleSpanProcessor(exporter)],
         advanced=logfire.AdvancedOptions(
             id_generator=SeededRandomIdGenerator(),
         ),
@@ -753,11 +767,11 @@ def test_pydantic_plugin_plugin_settings_sample_rate_with_tag(exporter: TestExpo
         with pytest.raises(ValidationError):
             MyModel.model_validate({'x': 'a'})
 
-    assert len(exporter.exported_spans_as_dict()) == 6
-
-    # TODO(Marcelo): Why are those lines not being reached?
-    span = exporter.exported_spans_as_dict()[0]  # pragma: no cover
-    assert span['attributes']['logfire.tags'] == ('test_tag',)  # pragma: no cover
+    spans = exporter.exported_spans_as_dict(include_instrumentation_scope=True)
+    assert len(spans) == 5
+    # `tags` and `trace_sample_rate` are both applied to the same per-model Logfire instance.
+    assert all(span['attributes']['logfire.tags'] == ('test_tag',) for span in spans)
+    assert {span['instrumentation_scope'] for span in spans} <= {'logfire.pydantic'}
 
 
 def test_pydantic_plugin_nested_model(exporter: TestExporter):

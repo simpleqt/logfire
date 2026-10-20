@@ -8,7 +8,7 @@ import warnings
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from logging import getLogger
 from typing import Any
@@ -35,6 +35,7 @@ from logfire._internal.config import GLOBAL_CONFIG, LogfireConfig, LogfireNotCon
 from logfire._internal.constants import (
     ATTRIBUTES_MESSAGE_KEY,
     ATTRIBUTES_MESSAGE_TEMPLATE_KEY,
+    ATTRIBUTES_SAMPLE_RATE_KEY,
     ATTRIBUTES_SPAN_TYPE_KEY,
     ATTRIBUTES_TAGS_KEY,
     LEVEL_NUMBERS,
@@ -862,6 +863,33 @@ def test_log_with_tags(exporter: TestExporter):
             }
         ]
     )
+
+
+def test_log_with_trace_sample_rate(exporter: TestExporter, config_kwargs: dict[str, Any]):
+    # A rate of 0 keeps nothing, a rate of 1 keeps everything, and a fractional rate keeps the
+    # spans whose span id falls in the sampled range, recording the rate on those spans.
+    config_kwargs['advanced'] = replace(config_kwargs['advanced'], id_generator=SeededRandomIdGenerator())
+    logfire.configure(**config_kwargs)
+
+    scoped = logfire.DEFAULT_LOGFIRE_INSTANCE.with_settings(custom_scope_suffix='pydantic').with_tags('tag1')
+
+    for sample_rate, expected_count in [(0.0, 0), (0.5, 3), (1.0, 10)]:
+        exporter.clear()
+        lf = scoped.with_trace_sample_rate(sample_rate)
+        for i in range(10):
+            lf.info('test {i}', i=i)
+
+        spans = exporter.exported_spans_as_dict(include_instrumentation_scope=True)
+        assert len(spans) == expected_count
+        # Sampling must not drop the settings already applied to the instance.
+        assert {span['instrumentation_scope'] for span in spans} <= {'logfire.pydantic'}
+        expected_rate = None if sample_rate == 1 else sample_rate
+        for span in spans:
+            assert span['attributes'].get(ATTRIBUTES_TAGS_KEY) == ('tag1',)
+            assert span['attributes'].get(ATTRIBUTES_SAMPLE_RATE_KEY) == expected_rate
+
+    with pytest.raises(ValueError, match='sample_rate must be between 0 and 1'):
+        scoped.with_trace_sample_rate(1.5)
 
 
 def test_log_with_multiple_tags(exporter: TestExporter):

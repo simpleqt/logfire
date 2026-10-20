@@ -98,9 +98,9 @@ class _ValidateWrapper:
         self._record = record
 
         self._logfire = logfire.DEFAULT_LOGFIRE_INSTANCE.with_settings(custom_scope_suffix='pydantic')
-        # trace_sample_rate = _plugin_settings.get('logfire', {}).get('trace_sample_rate')
-        # if trace_sample_rate:
-        #     self._logfire = self._logfire.with_trace_sample_rate(float(trace_sample_rate))
+        trace_sample_rate = _plugin_settings.get('logfire', {}).get('trace_sample_rate')
+        if trace_sample_rate is not None:
+            self._logfire = self._logfire.with_trace_sample_rate(float(trace_sample_rate))
 
         tags = _plugin_settings.get('logfire', {}).get('tags')
         if tags:

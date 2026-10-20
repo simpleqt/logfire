@@ -864,11 +864,20 @@ class Logfire:
         """
         return self.with_settings(tags=tags)
 
-    def with_trace_sample_rate(self, sample_rate: float) -> Logfire:  # pragma: no cover
+    def with_trace_sample_rate(self, sample_rate: float) -> Logfire:
         """A new Logfire instance with the given sampling ratio applied.
 
+        ```py
+        import logfire
+
+        logfire.configure()
+
+        local_logfire = logfire.with_trace_sample_rate(0.5)
+        local_logfire.info('a log message')
+        ```
+
         Args:
-            sample_rate: The sampling ratio to use.
+            sample_rate: The sampling ratio to use, between 0 and 1 inclusive.
 
         Returns:
             A new Logfire instance with the sampling ratio applied.
@@ -879,6 +888,8 @@ class Logfire:
             config=self._config,
             tags=self._tags,
             sample_rate=sample_rate,
+            console_log=self._console_log,
+            otel_scope=self._otel_scope,
         )
 
     def with_settings(
