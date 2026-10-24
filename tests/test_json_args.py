@@ -1055,6 +1055,28 @@ def test_log_dataframe_odd_display_limits_formatting(
     ]
 
 
+def test_log_dataframe_keeps_int_columns(exporter: TestExporter) -> None:
+    """An int column must stay an int when the data frame is logged.
+
+    `DataFrame.iterrows()` builds each row from `DataFrame.values`, which upcasts a row of mixed
+    numeric dtypes to a single dtype, so the int column used to be logged as floats. `2**53 + 1`
+    isn't representable as a float, so that upcast also changed the value.
+    """
+    frame = pandas.DataFrame(
+        {'big': [2**53 + 1, 7], 'small': [1, 2], 'ratio': [0.5, 1.5]},
+        index=['a', 'b'],
+    )
+
+    logfire.info('frame', frame=frame)
+
+    attributes = exporter.exported_spans[0].attributes
+    assert attributes is not None
+    assert isinstance(attributes['frame'], str)
+    rows = json.loads(attributes['frame'])
+    assert rows == [[2**53 + 1, 1, 0.5], [7, 2, 1.5]]
+    assert [[type(cell) for cell in row] for row in rows] == [[int, int, float], [int, int, float]]
+
+
 def test_log_non_finite_scalar_float_args(exporter: TestExporter) -> None:
     logfire.info(
         'test message',

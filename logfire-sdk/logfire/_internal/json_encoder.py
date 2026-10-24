@@ -98,8 +98,18 @@ def _pandas_data_frame_encoder(o: Any, seen: set[int]) -> JsonValue:
 
     rows: list[Any] = []
     for row_slice in row_slices:
-        for _, row in o.iloc[row_slice].iterrows():
-            rows.append([item for column_slice in column_slices for item in row.iloc[column_slice]])
+        row_count = len(range(*row_slice.indices(len(o))))
+        # Convert each selected column on its own with `Series.tolist()`, rather than using the rows from
+        # `DataFrame.iterrows()`. `iterrows()` builds each row from `DataFrame.values`, which upcasts the
+        # row to a single dtype, so an int column beside a float column comes out as floats — losing
+        # precision for large ints. `Series.tolist()` keeps each column's own dtype, like the numpy
+        # encoder above, and gives plain Python scalars for nullable dtypes too.
+        columns = [
+            o.iloc[row_slice, column].tolist()
+            for column_slice in column_slices
+            for column in range(*column_slice.indices(len(o.columns)))
+        ]
+        rows.extend([column[row] for column in columns] for row in range(row_count))
 
     return to_json_value(rows, seen)
 
